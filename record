@@ -2,33 +2,33 @@
 
 require('dotenv').config({path: `${__dirname}/.env`});
 const yargs = require('yargs/yargs')
-const { hideBin } = require('yargs/helpers')
+const {hideBin} = require('yargs/helpers')
 const argv = yargs(hideBin(process.argv))
     .default({size: '1024x768'})
     .demandOption(['room'])
     .describe('size', 'The size of recorded video(s)')
     .describe('room', 'The ID of the room to record').argv;
 
-const { PassThrough } = require('stream');
+const {PassThrough} = require('stream');
 const fs = require('fs');
 const Websocket = require('ws');
-const { RTCAudioSink, RTCVideoSink } = require('wrtc').nonstandard;
-const { RTCPeerConnection, RTCIceCandidate, RTCSessionDescription } = require('wrtc');
+const {RTCAudioSink, RTCVideoSink} = require('wrtc').nonstandard;
+const {RTCPeerConnection, RTCIceCandidate, RTCSessionDescription} = require('wrtc');
 const ffmpeg = require('fluent-ffmpeg');
-const { StreamInput } = require('fluent-ffmpeg-multistream');
+const {StreamInput} = require('fluent-ffmpeg-multistream');
 
 const VIDEO_OUTPUT_SIZE = argv.size;
 const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
-const VIDEO_OUTPUT_DIR = `./storage/app/public/recordings/${argv.room}`;
+const VIDEO_OUTPUT_FILE = `./storage/app/public/recordings/${argv.room}.mp4`;
 
-let UID, peers = {}, signalingChannel;
+let peers = {}, signalingChannel;
 
 function initSignalingChannel(){
-    signalingChannel = new Websocket(`${process.env['PROTOCOL']}://${process.env['DOMAIN']}:${process.env['PORT']}${process.env['URL']}`);;
+    signalingChannel = new Websocket(`${process.env['PROTOCOL']}://${process.env['DOMAIN']}:${process.env['PORT']}${process.env['URL']}`);
     signalingChannel.onopen = () => {
         signalingChannel.send(JSON.stringify({
             action: 'record',
-            code: argv.room
+            room: argv.room
         }));
     };
     addSignalingListeners();
@@ -89,7 +89,11 @@ function initRemotePeer(peerId){
         pendingCandidates: []
     };
     addIceListeners(peerId);
-    beforeOffer(peers[peerId].connection);
+    initRecording(peerId);
+    signalingChannel.send(JSON.stringify({
+        action: 'record',
+        peer: peerId
+    }));
 }
 
 function addIceListeners(peerId){
@@ -114,45 +118,39 @@ function addIceListeners(peerId){
     });
 }
 
-function beforeOffer(peerConnection) {
-    const audioTransceiver = peerConnection.addTransceiver('audio');
-    const videoTransceiver = peerConnection.addTransceiver('video');
+function initRecording(peerId){
+    let connection = peers[peerId].connection;
+    const audioTransceiver = connection.addTransceiver('audio');
+    const videoTransceiver = connection.addTransceiver('video');
 
     const audioSink = new RTCAudioSink(audioTransceiver.receiver.track);
     const videoSink = new RTCVideoSink(videoTransceiver.receiver.track);
 
     const streams = [];
 
-    videoSink.addEventListener('frame', ({ frame: { width, height, data }}) => {
+    videoSink.addEventListener('frame', ({frame: {width, height, data}}) => {
         const size = width + 'x' + height;
-        if (!streams[0] || (streams[0] && streams[0].size !== size)) {
-            UID++;
-
+        if(!streams[0] || (streams[0] && streams[0].size !== size)){
             const stream = {
-                recordPath: `${VIDEO_INPUT_DIR}/${UID}.mp4`,
+                recordPath: `${VIDEO_INPUT_DIR}/${peerId}-${size}.mp4`,
                 size,
                 video: new PassThrough(),
                 audio: new PassThrough()
             };
-
-            const onAudioData = ({ samples: { buffer } }) => {
-                if (!stream.end) {
+            const onAudioData = ({samples: {buffer}}) => {
+                if(!stream.end){
                     stream.audio.push(Buffer.from(buffer));
                 }
             };
-
             audioSink.addEventListener('data', onAudioData);
-
             stream.audio.on('end', () => {
                 audioSink.removeEventListener('data', onAudioData);
             });
-
             streams.unshift(stream);
-
-            streams.forEach(item=>{
-                if (item !== stream && !item.end) {
+            streams.forEach(item => {
+                if(item !== stream && !item.end){
                     item.end = true;
-                    if (item.audio) {
+                    if(item.audio){
                         item.audio.end();
                     }
                     item.video.end();
@@ -160,43 +158,40 @@ function beforeOffer(peerConnection) {
             })
 
             stream.proc = ffmpeg()
-            .addInput((new StreamInput(stream.video)).url)
-            .addInputOptions([
-                '-f', 'rawvideo',
-                '-pix_fmt', 'yuv420p',
-                '-s', stream.size,
-                '-r', '30',
-            ])
-            .addInput((new StreamInput(stream.audio)).url)
-            .addInputOptions([
-                '-f s16le',
-                '-ar 48k',
-                '-ac 1',
-            ])
-            .on('start', ()=>{
-                console.log('Start recording >> ', stream.recordPath)
-            })
-            .on('end', ()=>{
-                stream.recordEnd = true;
-                console.log('Stop recording >> ', stream.recordPath)
-            })
-            .size(VIDEO_OUTPUT_SIZE)
-            .output(stream.recordPath);
-
+                .addInput((new StreamInput(stream.video)).url)
+                .addInputOptions([
+                    '-f', 'rawvideo',
+                    '-pix_fmt', 'yuv420p',
+                    '-s', stream.size,
+                    '-r', '30',
+                ])
+                .addInput((new StreamInput(stream.audio)).url)
+                .addInputOptions([
+                    '-f s16le',
+                    '-ar 48k'
+                ])
+                .on('start', () => {
+                    console.log('Started recording to ', stream.recordPath)
+                })
+                .on('end', () => {
+                    stream.recordEnd = true;
+                    console.log('Stopped recording to ', stream.recordPath)
+                })
+                .size(VIDEO_OUTPUT_SIZE)
+                .output(stream.recordPath);
             stream.proc.run();
         }
-
         streams[0].video.push(Buffer.from(data));
     });
 
-    const { close } = peerConnection;
-    peerConnection.close = function() {
+    const {close} = connection;
+    connection.close = function(){
         audioSink.stop();
         videoSink.stop();
 
-        streams.forEach(({ audio, video, end, proc, recordPath })=>{
-            if (!end) {
-                if (audio) {
+        streams.forEach(({audio, video, end, proc, recordPath}) => {
+            if(!end){
+                if(audio){
                     audio.end();
                 }
                 video.end();
@@ -204,31 +199,27 @@ function beforeOffer(peerConnection) {
         });
 
         let totalEnd = 0;
-        const timer = setInterval(()=>{
-            streams.forEach(stream=>{
-                if (stream.recordEnd) {
+        const timer = setInterval(() => {
+            streams.forEach(stream => {
+                if(stream.recordEnd){
                     totalEnd++;
-                    if (totalEnd === streams.length) {
-                        clearTimeout(timer);
+                    if(totalEnd === streams.length){
+                        clearInterval(timer);
 
-                        const mergeProc = ffmpeg()
-                        .on('start', ()=>{
+                        const mergeProc = ffmpeg().on('start', () => {
                             console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
-                        })
-                        .on('end', ()=>{
-                            streams.forEach(({ recordPath })=>{
+                        }).on('end', () => {
+                            streams.forEach(({recordPath}) => {
                                 fs.unlinkSync(recordPath);
                             })
-                            console.log('Merge end. You can play ' + VIDEO_OUTPUT_FILE);
+                            console.log('Finished merging ' + VIDEO_OUTPUT_FILE);
                         });
 
-                        streams.forEach(({ recordPath })=>{
+                        streams.forEach(({recordPath}) => {
                             mergeProc.addInput(recordPath)
                         });
 
-                        mergeProc
-                        .output(VIDEO_OUTPUT_FILE)
-                        .run();
+                        mergeProc.output(VIDEO_OUTPUT_FILE).run();
                     }
                 }
             });
@@ -237,3 +228,6 @@ function beforeOffer(peerConnection) {
         return close.apply(this, arguments);
     }
 }
+
+// Starts recording by scanning the given room for participating users.
+initSignalingChannel();
