@@ -1,0 +1,239 @@
+#! /usr/bin/env node
+
+require('dotenv').config({path: `${__dirname}/.env`});
+const yargs = require('yargs/yargs')
+const { hideBin } = require('yargs/helpers')
+const argv = yargs(hideBin(process.argv))
+    .default({size: '1024x768'})
+    .demandOption(['room'])
+    .describe('size', 'The size of recorded video(s)')
+    .describe('room', 'The ID of the room to record').argv;
+
+const { PassThrough } = require('stream');
+const fs = require('fs');
+const Websocket = require('ws');
+const { RTCAudioSink, RTCVideoSink } = require('wrtc').nonstandard;
+const { RTCPeerConnection, RTCIceCandidate, RTCSessionDescription } = require('wrtc');
+const ffmpeg = require('fluent-ffmpeg');
+const { StreamInput } = require('fluent-ffmpeg-multistream');
+
+const VIDEO_OUTPUT_SIZE = argv.size;
+const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
+const VIDEO_OUTPUT_DIR = `./storage/app/public/recordings/${argv.room}`;
+
+let UID, peers = {}, signalingChannel;
+
+function initSignalingChannel(){
+    signalingChannel = new Websocket(`${process.env['PROTOCOL']}://${process.env['DOMAIN']}:${process.env['PORT']}${process.env['URL']}`);;
+    signalingChannel.onopen = () => {
+        signalingChannel.send(JSON.stringify({
+            action: 'record',
+            code: argv.room
+        }));
+    };
+    addSignalingListeners();
+}
+
+function addSignalingListeners(){
+    signalingChannel.onmessage = (e) => {
+        var message = JSON.parse(e.data);
+        switch(message.action){
+            case 'peer':
+                initRemotePeer(message.id);
+                break;
+            case 'offer':
+                handleOffer(message.offer, message.senderId)
+                break;
+            case 'candidate':
+                handleCandidate(message.candidate, message.senderId);
+                break;
+        }
+    }
+}
+
+function handleOffer(offer, senderId){
+    let connection = peers[senderId].connection;
+    connection.setRemoteDescription(new RTCSessionDescription(offer)).then(() => {
+        addPendingCandidates(senderId);
+        return connection.createAnswer();
+    }).then((answer) => {
+        return connection.setLocalDescription(answer);
+    }).then(() => {
+        peers[senderId].pendingSdp = {
+            action: 'answer',
+            id: senderId,
+            answer: connection.localDescription
+        };
+    });
+}
+
+function handleCandidate(candidate, senderId){
+    let connection = peers[senderId].connection;
+    if(!connection.remoteDescription)
+        peers[senderId].pendingCandidates.push(candidate);
+    else
+        connection.addIceCandidate(new RTCIceCandidate(candidate)).catch(function(e){
+            console.error('Could not add received ICE candidate', e);
+        });
+}
+
+function addPendingCandidates(peerId){
+    peers[peerId].pendingCandidates.forEach((candidate) => handleCandidate(candidate));
+    peers[peerId].pendingCandidates = [];
+}
+
+function initRemotePeer(peerId){
+    peers[peerId] = {
+        connection: new RTCPeerConnection({iceServers}),
+        pendingSdp: null,
+        pendingCandidates: []
+    };
+    addIceListeners(peerId);
+    beforeOffer(peers[peerId].connection);
+}
+
+function addIceListeners(peerId){
+    let connection = peers[peerId].connection;
+    connection.addEventListener('icecandidate', (e) => {
+        if(e.candidate)
+            signalingChannel.send(JSON.stringify({
+                action: 'candidate',
+                id: id,
+                candidate: e.candidate
+            }));
+    });
+    connection.addEventListener('icecandidateerror', (e) => {
+        console.error('ICE error:', e);
+    });
+    connection.addEventListener('icegatheringstatechange', (e) => {
+        let ice = e.target;
+        if(ice.iceGatheringState == 'complete' && peers[peerId].pendingSdp != null){
+            signalingChannel.send(JSON.stringify(peers[peerId].pendingSdp));
+            peers[peerId].pendingSdp = null;
+        }
+    });
+}
+
+function beforeOffer(peerConnection) {
+    const audioTransceiver = peerConnection.addTransceiver('audio');
+    const videoTransceiver = peerConnection.addTransceiver('video');
+
+    const audioSink = new RTCAudioSink(audioTransceiver.receiver.track);
+    const videoSink = new RTCVideoSink(videoTransceiver.receiver.track);
+
+    const streams = [];
+
+    videoSink.addEventListener('frame', ({ frame: { width, height, data }}) => {
+        const size = width + 'x' + height;
+        if (!streams[0] || (streams[0] && streams[0].size !== size)) {
+            UID++;
+
+            const stream = {
+                recordPath: `${VIDEO_INPUT_DIR}/${UID}.mp4`,
+                size,
+                video: new PassThrough(),
+                audio: new PassThrough()
+            };
+
+            const onAudioData = ({ samples: { buffer } }) => {
+                if (!stream.end) {
+                    stream.audio.push(Buffer.from(buffer));
+                }
+            };
+
+            audioSink.addEventListener('data', onAudioData);
+
+            stream.audio.on('end', () => {
+                audioSink.removeEventListener('data', onAudioData);
+            });
+
+            streams.unshift(stream);
+
+            streams.forEach(item=>{
+                if (item !== stream && !item.end) {
+                    item.end = true;
+                    if (item.audio) {
+                        item.audio.end();
+                    }
+                    item.video.end();
+                }
+            })
+
+            stream.proc = ffmpeg()
+            .addInput((new StreamInput(stream.video)).url)
+            .addInputOptions([
+                '-f', 'rawvideo',
+                '-pix_fmt', 'yuv420p',
+                '-s', stream.size,
+                '-r', '30',
+            ])
+            .addInput((new StreamInput(stream.audio)).url)
+            .addInputOptions([
+                '-f s16le',
+                '-ar 48k',
+                '-ac 1',
+            ])
+            .on('start', ()=>{
+                console.log('Start recording >> ', stream.recordPath)
+            })
+            .on('end', ()=>{
+                stream.recordEnd = true;
+                console.log('Stop recording >> ', stream.recordPath)
+            })
+            .size(VIDEO_OUTPUT_SIZE)
+            .output(stream.recordPath);
+
+            stream.proc.run();
+        }
+
+        streams[0].video.push(Buffer.from(data));
+    });
+
+    const { close } = peerConnection;
+    peerConnection.close = function() {
+        audioSink.stop();
+        videoSink.stop();
+
+        streams.forEach(({ audio, video, end, proc, recordPath })=>{
+            if (!end) {
+                if (audio) {
+                    audio.end();
+                }
+                video.end();
+            }
+        });
+
+        let totalEnd = 0;
+        const timer = setInterval(()=>{
+            streams.forEach(stream=>{
+                if (stream.recordEnd) {
+                    totalEnd++;
+                    if (totalEnd === streams.length) {
+                        clearTimeout(timer);
+
+                        const mergeProc = ffmpeg()
+                        .on('start', ()=>{
+                            console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
+                        })
+                        .on('end', ()=>{
+                            streams.forEach(({ recordPath })=>{
+                                fs.unlinkSync(recordPath);
+                            })
+                            console.log('Merge end. You can play ' + VIDEO_OUTPUT_FILE);
+                        });
+
+                        streams.forEach(({ recordPath })=>{
+                            mergeProc.addInput(recordPath)
+                        });
+
+                        mergeProc
+                        .output(VIDEO_OUTPUT_FILE)
+                        .run();
+                    }
+                }
+            });
+        }, 1000)
+
+        return close.apply(this, arguments);
+    }
+}

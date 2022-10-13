@@ -1,0 +1,2 @@
+#! /bin/bash
+docker run --rm --volumes-from nginx -itw /home/projects/theultragrey/mysecretmeeting-recorder node bash
