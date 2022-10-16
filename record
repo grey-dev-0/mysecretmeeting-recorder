@@ -9,6 +9,12 @@ const argv = yargs(hideBin(process.argv))
     .describe('size', 'The size of recorded video(s)')
     .describe('room', 'The ID of the room to record').argv;
 
+const axios = require('axios').default.create({
+    headers: {
+        Authorization: 'Bearer ' + process.env['ICE_API_TOKEN'],
+        Accept: 'application/json'
+    }
+});
 const {PassThrough} = require('stream');
 const fs = require('fs');
 const Websocket = require('ws');
@@ -21,7 +27,7 @@ const VIDEO_OUTPUT_SIZE = argv.size;
 const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
 const VIDEO_OUTPUT_FILE = `./storage/app/public/recordings/${argv.room}.mp4`;
 
-let peers = {}, signalingChannel;
+let peers = {}, iceServers = [], signalingChannel;
 
 function initSignalingChannel(){
     signalingChannel = new Websocket(`${process.env['PROTOCOL']}://${process.env['DOMAIN']}:${process.env['PORT']}${process.env['URL']}`);
@@ -229,5 +235,8 @@ function initRecording(peerId){
     }
 }
 
-// Starts recording by scanning the given room for participating users.
-initSignalingChannel();
+// Starts the recording service for the given room.
+axios.get(process.env['ICE_API_URL']).then((response) => {
+    iceServers = response.iceServers;
+    initSignalingChannel();
+}).catch((error) => console.log(error));
