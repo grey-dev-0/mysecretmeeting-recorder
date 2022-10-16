@@ -9,7 +9,7 @@ const argv = yargs(hideBin(process.argv))
     .describe('size', 'The size of recorded video(s)')
     .describe('room', 'The ID of the room to record').argv;
 
-const axios = require('axios').default.create({
+const axios = require('axios').create({
     headers: {
         Authorization: 'Bearer ' + process.env['ICE_API_TOKEN'],
         Accept: 'application/json'
@@ -45,7 +45,8 @@ function addSignalingListeners(){
         var message = JSON.parse(e.data);
         switch(message.action){
             case 'peer':
-                initRemotePeer(message.id);
+                if(peers[message.id] === undefined)
+                    initRemotePeer(message.id);
                 break;
             case 'offer':
                 handleOffer(message.offer, message.senderId)
@@ -84,7 +85,7 @@ function handleCandidate(candidate, senderId){
 }
 
 function addPendingCandidates(peerId){
-    peers[peerId].pendingCandidates.forEach((candidate) => handleCandidate(candidate));
+    peers[peerId].pendingCandidates.forEach((candidate) => handleCandidate(candidate, peerId));
     peers[peerId].pendingCandidates = [];
 }
 
@@ -108,7 +109,7 @@ function addIceListeners(peerId){
         if(e.candidate)
             signalingChannel.send(JSON.stringify({
                 action: 'candidate',
-                id: id,
+                id: peerId,
                 candidate: e.candidate
             }));
     });
@@ -226,6 +227,7 @@ function initRecording(peerId){
                         });
 
                         mergeProc.output(VIDEO_OUTPUT_FILE).run();
+                        process.exit();
                     }
                 }
             });
