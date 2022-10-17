@@ -48,8 +48,8 @@ function addSignalingListeners(){
                 if(peers[message.id] === undefined)
                     initRemotePeer(message.id);
                 break;
-            case 'offer':
-                handleOffer(message.offer, message.senderId)
+            case 'answer':
+                handleAnswer(message.answer, message.senderId)
                 break;
             case 'candidate':
                 handleCandidate(message.candidate, message.senderId);
@@ -58,20 +58,10 @@ function addSignalingListeners(){
     }
 }
 
-function handleOffer(offer, senderId){
-    let connection = peers[senderId].connection;
-    connection.setRemoteDescription(new RTCSessionDescription(offer)).then(() => {
-        addPendingCandidates(senderId);
-        return connection.createAnswer();
-    }).then((answer) => {
-        return connection.setLocalDescription(answer);
-    }).then(() => {
-        peers[senderId].pendingSdp = {
-            action: 'answer',
-            id: senderId,
-            answer: connection.localDescription
-        };
-    });
+function handleAnswer(answer, peerId){
+    let connection = peers[peerId].connection;
+    if(!connection.remoteDescription)
+        connection.setRemoteDescription(new RTCSessionDescription(answer)).then(() => addPendingCandidates(peerId));
 }
 
 function handleCandidate(candidate, senderId){
@@ -97,10 +87,13 @@ function initRemotePeer(peerId){
     };
     addIceListeners(peerId);
     initRecording(peerId);
-    signalingChannel.send(JSON.stringify({
-        action: 'record',
-        peer: peerId
-    }));
+    peers[peerId].connection.createOffer().then((offer) => peers[peerId].connection.setLocalDescription(offer)).then(() => {
+        signalingChannel.send(JSON.stringify({
+            action: 'record',
+            peer: peerId,
+            offer: peers[peerId].connection.localDescription
+        }));
+    });
 }
 
 function addIceListeners(peerId){
@@ -239,6 +232,8 @@ function initRecording(peerId){
 
 // Starts the recording service for the given room.
 axios.get(process.env['ICE_API_URL']).then((response) => {
+    if(!fs.existsSync(VIDEO_INPUT_DIR))
+        fs.mkdirSync(VIDEO_INPUT_DIR, {recursive: true});
     iceServers = response.iceServers;
     initSignalingChannel();
 }).catch((error) => console.log(error));
