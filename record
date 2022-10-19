@@ -55,6 +55,8 @@ function addSignalingListeners(){
             case 'candidate':
                 handleCandidate(message.candidate, message.senderId);
                 break;
+            case 'disconnect':
+                peerDisconnected(message.peer);
         }
     }
 }
@@ -135,15 +137,10 @@ function initStream(peerId){
         video: null,
         audio: new PassThrough()
     };
-    const onAudioData = ({samples: {buffer}}) => {
+    peers[peerId].sink.audio.addEventListener('data',  ({samples: {buffer}}) => {
         if(peers[peerId].audioOnly && !peers[peerId].stream.proc)
             initPeerRecording(peerId);
-        if(!peers[peerId].stream.end)
-            peers[peerId].stream.audio.push(Buffer.from(buffer));
-    };
-    peers[peerId].sink.audio.addEventListener('data', onAudioData);
-    peers[peerId].stream.audio.on('end', () => {
-        peers[peerId].sink.audio.removeEventListener('data', onAudioData);
+        peers[peerId].stream.audio.push(Buffer.from(buffer));
     });
 }
 
@@ -188,27 +185,37 @@ function initPeerRecording(peerId){
 }
 
 function initRecording(peerId){
-    let connection = peers[peerId].connection;
     initStream(peerId);
     if(peers[peerId].audioOnly)
         peers[peerId].stream.recordPath += '.mp3';
     else
         enableVideo(peerId);
+}
 
-    connection.addEventListener('connectionstatechange', () => {
-        if(['disconnected', 'closed'].includes(connection.connectionState)){
-            peers[peerId].sink.audio.stop();
-            if(!peers[peerId].audioOnly)
-                peers[peerId].sink.video.stop();
-            if(!peers[peerId].stream.end){
-                if(peers[peerId].stream.audio)
-                    peers[peerId].stream.audio.end();
-                if(peers[peerId].stream.video)
-                    peers[peerId].stream.video.end();
-                peers[peerId].stream.end = true;
-            }
+function peerDisconnected(peerId){
+    if(peers[peerId].terminate !== undefined)
+        return;
+    peers[peerId].sink.audio.stop();
+    peers[peerId].terminate = setInterval(() => {
+        let channels = ['audio', 'video'], bytes = {audio: 0, video: 0}, audioOnly = peers[peerId].audioOnly;
+        for(let i in channels)
+            if(peers[peerId].stream[channels[i]])
+                bytes[channels[i]] = peers[peerId].stream[channels[i]].readableLength;
+        if((!audioOnly && bytes.video == 0) || (audioOnly && bytes.audio == 0)){
+            clearInterval(peers[peerId].terminate);
+            terminateRecording(peerId);
         }
-    });
+    }, 1000);
+}
+
+function terminateRecording(peerId){
+    if(!peers[peerId].audioOnly)
+        peers[peerId].sink.video.stop();
+    if(peers[peerId].stream.audio)
+        peers[peerId].stream.audio.end();
+    if(peers[peerId].stream.video)
+        peers[peerId].stream.video.end();
+    peers[peerId].stream.end = true;
 }
 
 function square(number){
@@ -274,7 +281,7 @@ let peersLoop = setInterval(() => {
             offlineCount++;
     if(offlineCount == peersCount){
         clearInterval(peersLoop);
-        mergeStreams();
+        process.exit();
     }
 }, 1000);
 
