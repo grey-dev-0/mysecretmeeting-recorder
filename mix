@@ -1,0 +1,73 @@
+#! /usr/bin/env node
+
+require('dotenv').config({path: `${__dirname}/.env`});
+const yargs = require('yargs/yargs');
+const {hideBin} = require('yargs/helpers')
+const argv = yargs(hideBin(process.argv))
+    .default({size: '1024x768'})
+    .demandOption(['room'])
+    .describe('size', 'The size of recorded video(s)')
+    .describe('room', 'The ID of the room to record')
+    .describe('audioOnly', 'Pass this option if you\'d like to only record the audio of the given room').argv;
+
+const ffmpeg = require("fluent-ffmpeg");
+const rmdir = require("rimraf");
+const glob = require('glob');
+
+const VIDEO_OUTPUT_SIZE = argv.size;
+const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
+const VIDEO_OUTPUT_FILE = `./storage/app/public/recordings/${argv.room}`;
+
+function square(number){
+    let steps = 0;
+    if(Math.sqrt(number) - Math.floor(Math.sqrt(number)) == 0)
+        return {number, steps};
+    while(true){
+        steps++;
+        number++;
+        if(Math.sqrt(number) - Math.floor(Math.sqrt(number)) == 0)
+            return {number, steps};
+    }
+}
+
+function mergeStreams(){
+    let files = glob.sync(`${VIDEO_INPUT_DIR}/*.mp*`);
+    let audioOnly = argv.audioOnly || false, videosCount = files.length, filters = [], i, proc = ffmpeg().on('start', () => {
+        console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
+    }).on('end', () => {
+        rmdir(VIDEO_INPUT_DIR);
+        console.log('Finished merging ' + VIDEO_OUTPUT_FILE);
+        process.exit();
+    });
+    for(i in peers){
+        proc.addInput(peers[i].stream.recordPath)
+        if(peers[i].audioOnly)
+            videosCount--;
+    }
+    if(videosCount <= 0)
+        audioOnly = true;
+    else{
+        let {number: squareEdge, steps: fills} = square(videosCount), i = 0, hstack, vstack = '';
+        if(squareEdge > 1){
+            if(fills > 0)
+                filters.push(`color=black:s=${VIDEO_OUTPUT_SIZE}[black]`);
+            for(let row = 0; row < squareEdge; row++){
+                hstack = '';
+                for(let column = 0; column < squareEdge; column++){
+                    hstack += (i < videosCount)? `[${i}:v]` : '[black]';
+                    i++;
+                }
+                hstack += `hstack=inputs=${squareEdge}[r${row}]`;
+                vstack += `[r${row}]`;
+                filters.push(hstack);
+            }
+            vstack += 'vstack[m]';
+            filters.push(vstack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
+        }
+    }
+    if(peers.length > 1)
+        filters.push(`amix=${peers.length}`);
+    if(filters.length)
+        proc.complexFilter(filters);
+    proc.output(VIDEO_OUTPUT_FILE + audioOnly? '.mp3' : '.mp4').run();
+}
