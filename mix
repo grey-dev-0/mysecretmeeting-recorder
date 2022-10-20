@@ -17,57 +17,74 @@ const glob = require('glob');
 const VIDEO_OUTPUT_SIZE = argv.size;
 const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
 const VIDEO_OUTPUT_FILE = `./storage/app/public/recordings/${argv.room}`;
+let root;       // Number of video cells in one dimension of the grid.
 
-function square(number){
-    let steps = 0;
-    if(Math.sqrt(number) - Math.floor(Math.sqrt(number)) == 0)
-        return {number, steps};
-    while(true){
-        steps++;
-        number++;
-        if(Math.sqrt(number) - Math.floor(Math.sqrt(number)) == 0)
-            return {number, steps};
-    }
+/**
+ * Gets xstack compatible width or height coordinate e.g. 0, w0 or, h0+h0.
+ * The first cell's w and / or h is used as all cells are of the same size in this application.
+ *
+ * @param axis 'w' for width or 'h' for height.
+ * @param value number of the w or h cell starts from zero.
+ * @returns string
+ */
+function coordinate(axis, value){
+    if(value == 0)
+        return 0;
+    let coordinate = [];
+    for(let i = 0; i < value; i++)
+        coordinate.push(axis + '0');
+    return coordinate.join('+');
 }
 
-function mergeStreams(){
-    let files = glob.sync(`${VIDEO_INPUT_DIR}/*.mp*`);
-    let audioOnly = argv.audioOnly || false, videosCount = files.length, filters = [], i, proc = ffmpeg().on('start', () => {
-        console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
-    }).on('end', () => {
-        rmdir(VIDEO_INPUT_DIR);
-        console.log('Finished merging ' + VIDEO_OUTPUT_FILE);
-        process.exit();
-    });
-    for(i in files){
-        proc.addInput(files[i]);
-        if(files[i].match(/\.mp3$/))
-            videosCount--;
+/**
+ * Gets xstack compatible layout string e.g. 0_0|w0_0 for the given cells as square grid.
+ *
+ * @param cells How many cells in the layout.
+ * @returns string
+ */
+function layout(cells){
+    root = Math.sqrt(cells), layout = [];
+    while(root - Math.floor(root) != 0){
+        cells++;
+        root = Math.sqrt(cells);
     }
-    if(videosCount <= 0)
-        audioOnly = true;
-    else{
-        let {number: squareEdge, steps: fills} = square(videosCount), i = 0, hstack, vstack = '';
-        if(squareEdge > 1){
-            if(fills > 0)
-                filters.push(`color=black:s=${VIDEO_OUTPUT_SIZE}[black]`);
-            for(let row = 0; row < squareEdge; row++){
-                hstack = '';
-                for(let column = 0; column < squareEdge; column++){
-                    hstack += (i < videosCount)? `[${i}:v]` : '[black]';
-                    i++;
-                }
-                hstack += `hstack=inputs=${squareEdge}[r${row}]`;
-                vstack += `[r${row}]`;
-                filters.push(hstack);
-            }
-            vstack += 'vstack[m]';
-            filters.push(vstack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
-        }
-    }
-    if(files.length > 1)
-        filters.push(`amix=${files.length}`);
-    if(filters.length)
-        proc.complexFilter(filters);
-    proc.output(VIDEO_OUTPUT_FILE + audioOnly? '.mp3' : '.mp4').run();
+    for(var h = 0; h < root; h++)
+        for(var w = 0; w < root; w++)
+            layout.push(coordinate('w', w) + '_' + coordinate('h', h));
+    return layout.join('|');
 }
+
+let files = glob.sync(`${VIDEO_INPUT_DIR}/*.mp*`);
+let audioOnly = argv.audioOnly || false, videosCount = files.length, filters = [], i, proc = ffmpeg().on('start', () => {
+    console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
+}).on('end', () => {
+    rmdir(VIDEO_INPUT_DIR);
+    console.log('Finished merging ' + VIDEO_OUTPUT_FILE);
+    process.exit();
+});
+for(i in files){
+    proc.addInput(files[i]);
+    if(files[i].match(/\.mp3$/))
+        videosCount--;
+}
+if(videosCount <= 0)
+    audioOnly = true;
+else{
+    let stack = '', grid = layout(videosCount);
+    for(i = 0; i < videosCount; i++)
+        stack += `[${i}:v]`;
+    if(root * root > videosCount && videosCount % root == 0){
+        proc.addInput(`${__dirname}/black.mp4`);
+        stack += `[${videosCount}:v]`;
+        videosCount++;
+    }
+    stack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
+    filters.push(stack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
+}
+if(files.length > 1)
+    filters.push(`amix=${files.length}`);
+if(filters.length)
+    proc.complexFilter(filters);
+if(!audioOnly)
+    proc.outputOptions(['-map [v]']);
+proc.output(VIDEO_OUTPUT_FILE + (audioOnly? '.mp3' : '.mp4')).run();
