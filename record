@@ -150,9 +150,8 @@ function enableVideo(peerId){
 
     peers[peerId].sink.video.addEventListener('frame', ({frame: {width, height, data}}) => {
         if(!peers[peerId].stream.size){
-            const size = width + 'x' + height;
-            peers[peerId].stream.size = size;
-            peers[peerId].stream.recordPath += `-${size}.mp4`;
+            peers[peerId].stream.size = width + 'x' + height;
+            peers[peerId].stream.recordPath += '-[timestamp].mp4';
         }
         if(!peers[peerId].audioOnly && !peers[peerId].stream.proc)
             initPeerRecording(peerId);
@@ -162,6 +161,7 @@ function enableVideo(peerId){
 
 function initPeerRecording(peerId){
     let stream = peers[peerId].stream;
+    stream.recordPath = stream.recordPath.path.replace('[timestamp]', Math.floor(Date.now() / 1000));
     stream.proc = ffmpeg().addInput((new StreamInput(stream.audio)).url)
         .addInputOptions([
             '-f s16le',
@@ -186,7 +186,7 @@ function initPeerRecording(peerId){
 function initRecording(peerId){
     initStream(peerId);
     if(peers[peerId].audioOnly)
-        peers[peerId].stream.recordPath += '.mp3';
+        peers[peerId].stream.recordPath += '-[timestamp].mp3';
     else
         enableVideo(peerId);
 }
