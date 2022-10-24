@@ -63,49 +63,51 @@ glob.sync(`${VIDEO_INPUT_DIR}/*.mp*`).forEach((file) => {
         filename: file,
         timestamp,
         delay: 0,
-        audioOnly: file.match(/\.mp3$/)
+        audioOnly: /\.mp3$/.test(file)
     });
     if(timestamp < firstPeerTime)
         firstPeerTime = timestamp;
 });
-let proc = ffmpeg().on('start', () => {
+let proc = ffmpeg().on('start', (cmd) => {
     console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
 }).on('end', () => {
-    rmdir(VIDEO_INPUT_DIR);
+    rmdir.sync(VIDEO_INPUT_DIR);
     console.log('Finished merging ' + VIDEO_OUTPUT_FILE);
     process.exit();
 }), audioOnly = argv.audioOnly || (_find(files, {audioOnly: false}) === undefined), filters = [], i = 0,
     videosCount = _filter(files, {audioOnly: false}).length;
-let stack = '', grid = layout(videosCount);
+let videoStack = '', audioStack = '', grid = layout(videosCount);
 files.forEach((file) => {
     proc.addInput(file.filename);
     file.delay = file.timestamp - firstPeerTime;
 
-    if(!file.audioOnly){
-        if(file.delay == 0)
-            stack += `[${i}]`;
-        else{
-            filters.push(`[${i}:v]adelay=delays=${file.delay}s:all=1[audio${i}]`,
-                `[audio${i}]tpad=start_duration=${file.delay}s[video${i}]`);
-            stack += `[video${i}]`;
+    if(file.delay == 0){
+        audioStack += `[${i}:a]`;
+        if(!audioOnly && !file.audioOnly)
+            videoStack += `[${i}:v]`;
+    } else{
+        filters.push(`[${i}:a]adelay=delays=${file.delay}s:all=1[audio${i}]`);
+        audioStack += `[audio${i}]`;
+        if(!audioOnly && !file.audioOnly){
+            filters.push(`[${i}:v]tpad=start_duration=${file.delay}s[video${i}]`);
+            videoStack += `[video${i}]`;
         }
-    } else if(file.delay != 0)
-        filters.push(`[${i}:v]adelay=delays=${file.delay}s:all=1`);
+    }
     i++;
 });
+let outputOptions = ['-map [aout]'];
 if(!audioOnly){
+    outputOptions.push('-map [v]');
     if(root * root > videosCount && videosCount % root == 0){
         proc.addInput(`${__dirname}/black.mp4`);
-        stack += `[${videosCount}]`;
+        videoStack += `[${videosCount}]`;
         videosCount++;
     }
-    stack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
-    filters.push(stack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
+    videoStack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
+    filters.push(videoStack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
 }
-if(files.length > 1)
-    filters.push(`amix=${files.length}`);
+filters.push(`${audioStack}amix[aout]`);
 if(filters.length)
     proc.complexFilter(filters);
-if(!audioOnly)
-    proc.outputOptions(['-map [v]']);
+proc.outputOptions(outputOptions);
 proc.output(VIDEO_OUTPUT_FILE + (audioOnly? '.mp3' : '.mp4')).run();

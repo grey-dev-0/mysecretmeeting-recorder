@@ -161,7 +161,7 @@ function enableVideo(peerId){
 
 function initPeerRecording(peerId){
     let stream = peers[peerId].stream;
-    stream.recordPath = stream.recordPath.path.replace('[timestamp]', Math.floor(Date.now() / 1000));
+    stream.recordPath = stream.recordPath.replace('[timestamp]', Math.floor(Date.now() / 1000));
     stream.proc = ffmpeg().addInput((new StreamInput(stream.audio)).url)
         .addInputOptions([
             '-f s16le',
@@ -178,8 +178,7 @@ function initPeerRecording(peerId){
     stream.proc.on('start', () => {
         console.log('Started recording to ', stream.recordPath)
     }).on('end', () => {
-        stream.recordEnd = true;
-        console.log('Stopped recording to ', stream.recordPath)
+        console.log('Finished recording to ', stream.recordPath)
     }).size(VIDEO_OUTPUT_SIZE).output(stream.recordPath).run();
 }
 

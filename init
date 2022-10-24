@@ -2,4 +2,10 @@
 
 directory=$(dirname "$0")
 $directory/record "$@"
+room=$(echo "$@" | egrep -o '\-\-room=[A-Za-z0-9]+' | sed 's/--room=//')
+echo "Waiting for recording process of room $room to finish.."
+while [ $(ps aux | grep ffmpeg | grep $room | grep -v grep | wc -l) -gt 0 ]; do
+  sleep 1;
+done
+sleep 10;
 $directory/mix "$@"
