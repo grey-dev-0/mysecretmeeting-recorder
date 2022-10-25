@@ -36,6 +36,9 @@ function initSignalingChannel(){
             action: 'record',
             room: argv.room
         }));
+        setInterval(() => {
+            signalingChannel.send(JSON.stringify({action: 'ping'}));
+        }, 15000);
     };
     addSignalingListeners();
 }
@@ -82,7 +85,7 @@ function addPendingCandidates(peerId){
 }
 
 function initRemotePeer(initMessage){
-    let peerId = initMessage.id, audioOnly = argv.audioOnly || initMessage.audioOnly || false;
+    let peerId = initMessage.id, audioOnly = argv.audioOnly || initMessage.audio_only || false;
     peers[peerId] = {
         audioOnly,
         connection: new RTCPeerConnection({iceServers}),
