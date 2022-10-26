@@ -68,7 +68,7 @@ glob.sync(`${VIDEO_INPUT_DIR}/*.mp*`).forEach((file) => {
     if(timestamp < firstPeerTime)
         firstPeerTime = timestamp;
 });
-let proc = ffmpeg().on('start', (cmd) => {
+let proc = ffmpeg().on('start', () => {
     console.log('Start merging into ' + VIDEO_OUTPUT_FILE);
 }).on('end', () => {
     rmdir.sync(VIDEO_INPUT_DIR);
@@ -106,7 +106,7 @@ if(!audioOnly){
     videoStack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
     filters.push(videoStack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
 }
-filters.push(`${audioStack}amix[aout]`);
+filters.push(`${audioStack}amix=inputs=${files.length}:normalize=0[aout]`);
 if(filters.length)
     proc.complexFilter(filters);
 proc.outputOptions(outputOptions);
