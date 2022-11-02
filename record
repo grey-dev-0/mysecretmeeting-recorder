@@ -147,18 +147,32 @@ function initStream(peerId){
 }
 
 function enableVideo(peerId){
-    let connection = peers[peerId].connection;
+    let connection = peers[peerId].connection, lastFrame, frames = [];
     peers[peerId].stream.video = new PassThrough();
     peers[peerId].sink.video = new RTCVideoSink(connection.addTransceiver('video').receiver.track);
 
     peers[peerId].sink.video.addEventListener('frame', ({frame: {width, height, data}}) => {
+        lastFrame = data;
+        frames.push(lastFrame);
         if(!peers[peerId].stream.size){
             peers[peerId].stream.size = width + 'x' + height;
             peers[peerId].stream.recordPath += '-[timestamp].mp4';
         }
-        if(!peers[peerId].audioOnly && !peers[peerId].stream.proc)
+        if(!peers[peerId].audioOnly && !peers[peerId].stream.proc){
             initPeerRecording(peerId);
-        peers[peerId].stream.video.push(Buffer.from(data));
+            let interval = setInterval(() => {
+                frames.forEach((frame) => {
+                    peers[peerId].stream.video.push(Buffer.from(frame));
+                });
+                let lostFrames = 30 - frames.length;
+                if(lostFrames > 0)
+                    for(let i = 0; i < lostFrames; i++)
+                        peers[peerId].stream.video.push(Buffer.from(lastFrame));
+                frames = [];
+                if(peers[peerId].disconnected)
+                    clearInterval(interval);
+            }, 1000);
+        }
     });
 }
 
@@ -207,6 +221,7 @@ function peerDisconnected(peerId){
             terminateRecording(peerId);
         }
     }, 1000);
+    peers[peerId].disconnected = true;
 }
 
 function terminateRecording(peerId){
