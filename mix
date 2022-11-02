@@ -95,18 +95,22 @@ files.forEach((file) => {
     }
     i++;
 });
-let outputOptions = ['-map [aout]'];
+let outputOptions = (files.length > 1)? ['-map [aout]'] : [];
 if(!audioOnly){
-    outputOptions.push('-map [v]');
-    if(root * root > videosCount && videosCount % root == 0){
-        proc.addInput(`${__dirname}/black.mp4`);
-        videoStack += `[${videosCount}]`;
-        videosCount++;
+    outputOptions.push('-vcodec libx264', '-preset slower', '-tune film');
+    if(files.length > 1){
+        outputOptions.push('-map [v]');
+        if(root * root > videosCount && videosCount % root == 0){
+            proc.addInput(`${__dirname}/black.mp4`);
+            videoStack += `[${videosCount}]`;
+            videosCount++;
+        }
+        videoStack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
+        filters.push(videoStack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
     }
-    videoStack += `xstack=inputs=${videosCount}:layout=${grid}:fill=black[m]`;
-    filters.push(videoStack, `[m]scale=${VIDEO_OUTPUT_SIZE}[v]`);
 }
-filters.push(`${audioStack}amix=inputs=${files.length}:normalize=0[aout]`);
+if(files.length > 1)
+    filters.push(`${audioStack}amix=inputs=${files.length}:normalize=0[aout]`);
 if(filters.length)
     proc.complexFilter(filters);
 proc.outputOptions(outputOptions);
