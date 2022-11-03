@@ -19,7 +19,7 @@ const VIDEO_OUTPUT_SIZE = argv.size;
 const VIDEO_INPUT_DIR = `./storage/app/${argv.room}`;
 const VIDEO_OUTPUT_FILE = `./storage/app/public/recordings/${argv.room}`;
 let root;       // Number of video cells in one dimension of the grid.
-let firstPeerTime = Math.floor(Date.now());
+let firstPeerTime = Date.now();
 
 /**
  * Gets xstack compatible width or height coordinate e.g. 0, w0 or, h0+h0.
@@ -86,10 +86,10 @@ files.forEach((file) => {
         if(!audioOnly && !file.audioOnly)
             videoStack += `[${i}:v]`;
     } else{
-        filters.push(`[${i}:a]adelay=delays=${file.delay}s:all=1[audio${i}]`);
+        filters.push(`[${i}:a]adelay=delays=${file.delay}:all=1[audio${i}]`);
         audioStack += `[audio${i}]`;
         if(!audioOnly && !file.audioOnly){
-            filters.push(`[${i}:v]tpad=start_duration=${file.delay}s[video${i}]`);
+            filters.push(`[${i}:v]tpad=start_duration=${file.delay}ms[video${i}]`);
             videoStack += `[video${i}]`;
         }
     }

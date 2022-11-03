@@ -178,7 +178,7 @@ function enableVideo(peerId){
 
 function initPeerRecording(peerId){
     let stream = peers[peerId].stream;
-    stream.recordPath = stream.recordPath.replace('[timestamp]', Math.floor(Date.now() / 1000));
+    stream.recordPath = stream.recordPath.replace('[timestamp]', Date.now());
     stream.proc = ffmpeg().addInput((new StreamInput(stream.audio)).url)
         .addInputOptions([
             '-f s16le',
